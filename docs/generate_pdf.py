@@ -170,18 +170,21 @@ def build_pdf(filename="docs/PROJECT_PROPOSAL_REPORT.pdf"):
 
     # Meta Table
     meta_data = [
-        [Paragraph("<b>Project Title:</b> RL-Driven Adaptive Fire & Gas IoT Monitor", table_text_style), Paragraph("<b>Roll No / Student ID:</b> [Insert Your Roll No Here]", table_text_style)],
-        [Paragraph("<b>GitHub Repository:</b> https://github.com/[User]/RL-Edge-AI-Fire-Gas-Monitor", table_text_style), Paragraph("<b>Dataset Reference:</b> Kaggle IoT Smoke & Gas Dataset", table_text_style)],
-        [Paragraph("<b>Target Hardware:</b> M5Stamp ESP32-S3 + BME680", table_text_style), Paragraph("<b>Power System:</b> 3.2V 600mAh LiFePO4 + INA219 Fuel Gauge", table_text_style)],
-        [Paragraph("<b>Cloud Telemetry:</b> AWS IoT Core + DynamoDB", table_text_style), Paragraph("<b>Alerting:</b> Amazon SNS (Instant Email)", table_text_style)]
+        [Paragraph("<b>Project Title:</b>", table_text_style), Paragraph("RL-Driven Adaptive Duty-Cycling for Ultra-Low-Power Edge IoT Fire & Gas Monitoring", table_text_style)],
+        [Paragraph("<b>Roll No / Student ID:</b>", table_text_style), Paragraph("___________________________ (Fill Student ID)", table_text_style)],
+        [Paragraph("<b>GitHub Repository:</b>", table_text_style), Paragraph("https://github.com/YOUR_USERNAME/RL-Edge-AI-Fire-Gas-Monitor", table_text_style)],
+        [Paragraph("<b>Primary Dataset:</b>", table_text_style), Paragraph("Kaggle IoT Smoke Detection Dataset (Kaggle: deepcontractor/smoke-detection-dataset)", table_text_style)],
+        [Paragraph("<b>Secondary Dataset:</b>", table_text_style), Paragraph("UCI Gas Sensor Array Under Dynamic Gas Mixtures (UCI ML Repo: 322)", table_text_style)],
+        [Paragraph("<b>Hardware Platforms:</b>", table_text_style), Paragraph("Primary: M5Stamp ESP32-S3 + BME680 | Backup: ESP32-S3-Nano + BMP280/MQ2", table_text_style)],
+        [Paragraph("<b>Cloud Telemetry & Alerting:</b>", table_text_style), Paragraph("AWS IoT Core + Amazon DynamoDB (Logs) + Amazon SNS (Email)", table_text_style)],
     ]
-    meta_table = Table(meta_data, colWidths=[250, 250])
+    meta_table = Table(meta_data, colWidths=[140, 360])
     meta_table.setStyle(TableStyle([
         ('BACKGROUND', (0,0), (-1,-1), colors.HexColor("#f8fafc")),
-        ('BOX', (0,0), (-1,-1), 1, colors.HexColor("#e2e8f0")),
+        ('BOX', (0,0), (-1,-1), 1, colors.HexColor("#cbd5e1")),
         ('INNERGRID', (0,0), (-1,-1), 0.5, colors.HexColor("#e2e8f0")),
-        ('TOPPADDING', (0,0), (-1,-1), 6),
-        ('BOTTOMPADDING', (0,0), (-1,-1), 6),
+        ('TOPPADDING', (0,0), (-1,-1), 4),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 4),
     ]))
     story.append(meta_table)
     story.append(Spacer(1, 14))
@@ -237,8 +240,11 @@ def build_pdf(filename="docs/PROJECT_PROPOSAL_REPORT.pdf"):
     story.append(Spacer(1, 10))
 
     story.append(Paragraph(
-        "<b>Power Protection Note:</b> The TP5000 handles charging only; the separate 1S BMS board guarantees that cell voltage "
-        "never drops below 2.0V. The 1x AA holder prevents series overvoltage, delivering a stable 3.2V nominal rail directly to the ESP32.",
+        "<b>Hardware Redundancy & Alternative BOM (Sun Electronics / ESP32-S3-Nano):</b> "
+        "To ensure continuous hardware evaluation, an alternative hardware configuration was verified utilizing the "
+        "<b>ESP32-S3-Nano (ESP32-S3R8)</b> paired with a <b>Bosch BMP280</b> (I2C temperature/pressure) and <b>MQ-2 smoke sensor</b>, "
+        "powered by a 3.7V LiPo cell with a TP4056 charger and MT3608 5V step-up boost module. "
+        "Both hardware targets share the exact same RL state-action abstraction and firmware logic.",
         callout_style
     ))
 
