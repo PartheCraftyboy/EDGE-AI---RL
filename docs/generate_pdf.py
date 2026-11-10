@@ -170,9 +170,9 @@ def build_pdf(filename="docs/PROJECT_PROPOSAL_REPORT.pdf"):
 
     # Meta Table
     meta_data = [
-        [Paragraph("<b>Author / Role:</b> Student Engineer", table_text_style), Paragraph("<b>Submission Deadline:</b> Today (Nov 10, 2026)", table_text_style)],
-        [Paragraph("<b>Target Hardware:</b> ESP32-S3 (M5Stamp)", table_text_style), Paragraph("<b>Demonstration Date:</b> Nov 18, 2026", table_text_style)],
-        [Paragraph("<b>Sensors:</b> BME680 (Gas/VOC, T, P, H)", table_text_style), Paragraph("<b>Power System:</b> 3.2V 600mAh LiFePO4 + INA219 Fuel Gauge", table_text_style)],
+        [Paragraph("<b>Project Title:</b> RL-Driven Adaptive Fire & Gas IoT Monitor", table_text_style), Paragraph("<b>Roll No / Student ID:</b> [Insert Your Roll No Here]", table_text_style)],
+        [Paragraph("<b>GitHub Repository:</b> https://github.com/[User]/RL-Edge-AI-Fire-Gas-Monitor", table_text_style), Paragraph("<b>Dataset Reference:</b> Kaggle IoT Smoke & Gas Dataset", table_text_style)],
+        [Paragraph("<b>Target Hardware:</b> M5Stamp ESP32-S3 + BME680", table_text_style), Paragraph("<b>Power System:</b> 3.2V 600mAh LiFePO4 + INA219 Fuel Gauge", table_text_style)],
         [Paragraph("<b>Cloud Telemetry:</b> AWS IoT Core + DynamoDB", table_text_style), Paragraph("<b>Alerting:</b> Amazon SNS (Instant Email)", table_text_style)]
     ]
     meta_table = Table(meta_data, colWidths=[250, 250])
