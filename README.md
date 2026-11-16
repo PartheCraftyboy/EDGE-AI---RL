@@ -81,7 +81,7 @@ npm run dev
 Open **`http://localhost:5173`** in your browser.
 * Use the **"Simulate Fire Hazard"** button during presentations to demonstrate the RL agent detecting the hazard and triggering emergency mode in real time.
 
-### 4. Flashing the M5Stamp ESP32-S3 (On or before Nov 18th)
+### 4. Flashing the M5Stamp ESP32-S3
 1. Open Arduino IDE or PlatformIO.
 2. Install libraries:
    * `Adafruit BME680`
