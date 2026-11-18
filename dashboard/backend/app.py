@@ -72,6 +72,52 @@ for i in range(25):
         "energy_mJ": 576.0 if action == "EMERGENCY_ALERT" else (1.2 if action == "NORMAL_CYCLE" else 0.05)
     })
 
+# --- Rock-Solid MQTT Bridge: Connects Wokwi directly to Dashboard ---
+MQTT_BROKER = "broker.hivemq.com"
+MQTT_PORT = 1883
+MQTT_TOPIC = "rl-edge-fire-gas/kalki/telemetry"
+
+try:
+    import paho.mqtt.client as mqtt
+    import json
+
+    def on_mqtt_connect(client, userdata, flags, rc, properties=None):
+        print(f"[MQTT Cloud Bridge] Connected to {MQTT_BROKER}:1883! Subscribed to '{MQTT_TOPIC}'")
+        client.subscribe(MQTT_TOPIC)
+
+    def on_mqtt_message(client, userdata, msg):
+        try:
+            payload = json.loads(msg.payload.decode())
+            if "received_at" not in payload:
+                payload["received_at"] = int(time.time())
+            if "energy_mJ" not in payload:
+                act = payload.get("rl_action", "NORMAL_CYCLE")
+                payload["energy_mJ"] = 576.0 if act == "EMERGENCY_ALERT" else 1.2
+            simulated_history.append(payload)
+            if len(simulated_history) > 100:
+                simulated_history.pop(0)
+            print(f">>> [Live Wokwi Telemetry Ingested] Temp: {payload.get('temperature_c')} C | Gas: {payload.get('gas_resistance_kohm')} kOhm | Action: {payload.get('rl_action')}")
+        except Exception as err:
+            print(f"[MQTT Parse Error] {err}")
+
+    mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+    mqtt_client.on_connect = on_mqtt_connect
+    mqtt_client.on_message = on_mqtt_message
+    mqtt_client.connect_async(MQTT_BROKER, MQTT_PORT, 60)
+    mqtt_client.loop_start()
+except Exception as e:
+    print(f"[MQTT Warning] Could not start MQTT client: {e}")
+
+@app.get("/")
+def root():
+    return {
+        "status": "online",
+        "service": "M5Stamp RL Edge AI Telemetry API",
+        "dashboard_ui": "http://localhost:5173",
+        "interactive_api_docs": "http://localhost:8000/docs",
+        "telemetry_stream": "http://localhost:8000/api/telemetry"
+    }
+
 @app.get("/api/health")
 def health_check():
     return {
@@ -95,8 +141,56 @@ def get_telemetry(limit: int = 50):
         except Exception as e:
             print(f"[Error querying DynamoDB] {e}")
 
-    # Return simulated realistic history
+    # Live dynamic ticker: advance time if no real telemetry arrived in >3 seconds
+    now = int(time.time())
+    if simulated_history and (now - simulated_history[-1]["received_at"] >= 3):
+        last = simulated_history[-1]
+        is_alert = last.get("fire_alert", False)
+        # Settle back to normal after 20 seconds of alert
+        if is_alert and (now - last["received_at"] > 20):
+            is_alert = False
+            
+        if is_alert:
+            new_temp = round(last["temperature_c"] + random.uniform(-0.5, 0.5), 2)
+            new_gas = round(last["gas_resistance_kohm"] + random.uniform(-0.2, 0.2), 2)
+            act = "EMERGENCY_ALERT"
+        else:
+            new_temp = round(24.2 + random.uniform(-0.3, 0.3), 2)
+            new_gas = round(44.5 + random.uniform(-0.6, 0.6), 2)
+            act = "NORMAL_CYCLE"
+            
+        new_soc = round(max(5.0, last["battery_soc_pct"] - 0.01), 2)
+        new_v = round(2.50 + (new_soc / 100.0) * 1.15, 3)
+        simulated_history.append({
+            "device_id": last.get("device_id", "m5stamp-s3-edge-01"),
+            "received_at": now,
+            "temperature_c": new_temp,
+            "gas_resistance_kohm": new_gas,
+            "battery_voltage": new_v,
+            "battery_soc_pct": new_soc,
+            "fire_alert": is_alert,
+            "rl_action": act,
+            "energy_mJ": 576.0 if act == "EMERGENCY_ALERT" else 1.2
+        })
+        if len(simulated_history) > 100:
+            simulated_history.pop(0)
+
     return simulated_history[-limit:]
+
+@app.post("/telemetry")
+@app.post("/api/telemetry")
+async def receive_telemetry(payload: dict):
+    """Direct ingestion endpoint for ESP32-S3 (or Wokwi simulator) over HTTP."""
+    if "received_at" not in payload:
+        payload["received_at"] = int(time.time())
+    if "energy_mJ" not in payload:
+        act = payload.get("rl_action", "NORMAL_CYCLE")
+        payload["energy_mJ"] = 576.0 if act == "EMERGENCY_ALERT" else (1.2 if act == "NORMAL_CYCLE" else 0.05)
+    simulated_history.append(payload)
+    if len(simulated_history) > 200:
+        simulated_history.pop(0)
+    print(f"[Telemetry Ingested] Device: {payload.get('device_id')} | Temp: {payload.get('temperature_c')} °C | Gas: {payload.get('gas_resistance_kohm')} kOhm | Action: {payload.get('rl_action')}")
+    return {"status": "success", "received": payload}
 
 @app.post("/api/simulate_spike")
 def trigger_spike():

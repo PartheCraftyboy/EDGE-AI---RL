@@ -48,7 +48,13 @@ class AdaptiveAirQualityEnv:
         
     def reset(self):
         self.time_seconds = 0.0
-        self.battery_remaining_joules = self.BATTERY_CAPACITY_JOULES
+        # Multi-SoC domain randomization across episodes (Low <30%, Medium 30-70%, High >70%)
+        initial_soc = np.random.choice([
+            np.random.uniform(0.12, 0.28),  # Low battery (b_bin = 0)
+            np.random.uniform(0.35, 0.65),  # Medium battery (b_bin = 1)
+            np.random.uniform(0.75, 1.00),  # High battery (b_bin = 2)
+        ])
+        self.battery_remaining_joules = initial_soc * self.BATTERY_CAPACITY_JOULES
         
         # True physical state
         self.ambient_temp = 25.0 + np.random.uniform(-2, 2)
@@ -57,9 +63,15 @@ class AdaptiveAirQualityEnv:
         self.last_measured_temp = self.ambient_temp
         self.gas_derivative = 0.0
         
-        # Hazard scheduling: fire starts between 3000s and 8000s with 50% probability
-        self.has_fire = np.random.rand() < 0.6
-        self.fire_start_time = np.random.uniform(2000, 7000) if self.has_fire else 999999
+        # Multi-modal hazard scheduling:
+        # 0: Clean ambient air
+        # 1: Rapid flaming fire (temp spikes + smoke drops gas resistance)
+        # 2: Pure toxic gas / VOC leak (gas resistance drops < 10k while temp stays normal)
+        # 3: Smoldering fire (gas drops fast, temp slowly creeps up)
+        # 4: Heat wave / hot environment (elevated ambient temp 36-48°C, clean air)
+        self.hazard_mode = np.random.choice([0, 1, 2, 3, 4], p=[0.20, 0.30, 0.25, 0.15, 0.10])
+        self.has_fire = (self.hazard_mode > 0)
+        self.fire_start_time = np.random.uniform(1500, 6000) if self.has_fire else 999999
         self.fire_active = False
         self.fire_detected = False
         self.detection_delay = 0.0
@@ -118,18 +130,26 @@ class AdaptiveAirQualityEnv:
             self.fire_active = True
             
         if self.fire_active:
-            # Physical dynamics under fire: Temp rises, gas resistance plunges
-            self.ambient_temp += 0.8 * dt + np.random.normal(0, 0.2)
-            self.ambient_temp = min(self.ambient_temp, 95.0)
-            
-            # Smoke drops gas resistance exponentially toward 1-3 kOhm
-            self.gas_resistance = max(1.5, self.gas_resistance - (0.4 * dt))
+            if self.hazard_mode == 1:
+                # Flaming fire: rapid heat spike + smoke plunge
+                self.ambient_temp = min(95.0, self.ambient_temp + 0.8 * dt + np.random.normal(0, 0.2))
+                self.gas_resistance = max(1.5, self.gas_resistance - (0.4 * dt))
+            elif self.hazard_mode == 2:
+                # Pure toxic gas / VOC leak: gas plunge, normal temperature
+                self.gas_resistance = max(2.0, self.gas_resistance - (0.35 * dt))
+                self.ambient_temp = np.clip(self.ambient_temp + np.random.normal(0, 0.05), 18.0, 32.0)
+            elif self.hazard_mode == 3:
+                # Smoldering fire: smoke drops fast, temperature slowly creeps up
+                self.gas_resistance = max(2.5, self.gas_resistance - (0.25 * dt))
+                self.ambient_temp = min(55.0, self.ambient_temp + 0.15 * dt)
+            elif self.hazard_mode == 4:
+                # Elevated ambient room temperature (heat wave / furnace nearby)
+                self.ambient_temp = np.clip(self.ambient_temp + 0.1 * dt, 36.0, 48.0)
+                self.gas_resistance = np.clip(self.gas_resistance + np.random.normal(0, 0.1), 35.0, 55.0)
         else:
             # Normal ambient fluctuation
-            self.ambient_temp += np.random.normal(0, 0.05)
-            self.ambient_temp = np.clip(self.ambient_temp, 18.0, 32.0)
-            self.gas_resistance += np.random.normal(0, 0.1)
-            self.gas_resistance = np.clip(self.gas_resistance, 35.0, 60.0)
+            self.ambient_temp = np.clip(self.ambient_temp + np.random.normal(0, 0.05), 18.0, 32.0)
+            self.gas_resistance = np.clip(self.gas_resistance + np.random.normal(0, 0.1), 35.0, 60.0)
 
         # Energy consumed during this step
         energy_spent = self.P_SLEEP * dt + self.E_MCU_ACTIVE
@@ -163,8 +183,11 @@ class AdaptiveAirQualityEnv:
         reward -= (energy_spent / 0.1) * 0.5
         
         # 2. Fire & Hazard detection dynamics
-        if self.fire_active:
-            if action["wifi"] and (measured_temp > 50.0 or measured_gas < 12.0):
+        is_hazard = (self.ambient_temp > 50.0) or (self.gas_resistance < 10.0)
+        is_elevated = (35.0 <= self.ambient_temp <= 50.0) or (10.0 <= self.gas_resistance <= 30.0) or (self.gas_derivative < -0.5)
+
+        if is_hazard:
+            if action["wifi"] and (measured_temp > 48.0 or measured_gas < 12.0):
                 # Correct emergency alert transmitted!
                 if not self.fire_detected:
                     self.fire_detected = True
@@ -174,10 +197,16 @@ class AdaptiveAirQualityEnv:
                 else:
                     reward += 20.0  # Continued tracking
             else:
-                # Fire is active but agent is sleeping or failing to alert!
+                # Fire/gas hazard is active but agent is sleeping or failing to alert!
                 reward -= 15.0 * (dt / 10.0)
+        elif is_elevated:
+            # Under elevated warning, fast sensing (action 2) is favored to track trend
+            if action_idx == 2:
+                reward += 2.0
+            elif action["wifi"]:
+                reward -= 40.0
         else:
-            # False alarm penalty: Firing Wi-Fi emergency alert when no fire exists
+            # False alarm penalty: Firing Wi-Fi emergency alert when no hazard exists
             if action["wifi"]:
                 reward -= 80.0
                 

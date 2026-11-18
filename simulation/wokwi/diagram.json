@@ -1,0 +1,69 @@
+{
+  "version": 1,
+  "author": "RL Edge AI Fire & Gas Team",
+  "editor": "wokwi",
+  "parts": [
+    {
+      "type": "board-esp32-s3-devkitc-1",
+      "id": "esp",
+      "top": 0,
+      "left": 0,
+      "attrs": { "flashSize": "8" }
+    },
+    {
+      "type": "wokwi-gas-sensor",
+      "id": "gas_sensor",
+      "top": -160,
+      "left": -140,
+      "attrs": { "ppm": "100" }
+    },
+    {
+      "type": "wokwi-ntc-temperature-sensor",
+      "id": "temp_sensor",
+      "top": -160,
+      "left": 140,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-potentiometer",
+      "id": "pot_battery",
+      "top": 80,
+      "left": -140,
+      "attrs": { "label": "LiFePO4 Fuel Gauge (INA219)", "value": "850" }
+    },
+    {
+      "type": "wokwi-pushbutton",
+      "id": "btn_fire",
+      "top": 80,
+      "left": 180,
+      "attrs": { "color": "red", "label": "Simulate Fire Spike" }
+    },
+    {
+      "type": "wokwi-led",
+      "id": "led_alarm",
+      "top": -20,
+      "left": 180,
+      "attrs": { "color": "red", "label": "Fire Alarm LED" }
+    }
+  ],
+  "connections": [
+    [ "temp_sensor:VCC", "esp:3V3.1", "red", [ "v0" ] ],
+    [ "temp_sensor:GND", "esp:GND.1", "black", [ "v0" ] ],
+    [ "temp_sensor:OUT", "esp:2", "green", [ "v0" ] ],
+
+    [ "gas_sensor:VCC", "esp:5V", "red", [ "v0" ] ],
+    [ "gas_sensor:GND", "esp:GND.2", "black", [ "v0" ] ],
+    [ "gas_sensor:AOUT", "esp:1", "blue", [ "v0" ] ],
+
+    [ "pot_battery:VCC", "esp:3V3.1", "red", [ "v0" ] ],
+    [ "pot_battery:GND", "esp:GND.3", "black", [ "v0" ] ],
+    [ "pot_battery:SIG", "esp:3", "purple", [ "v0" ] ],
+
+    [ "btn_fire:1.l", "esp:GND.4", "black", [ "v0" ] ],
+    [ "btn_fire:2.l", "esp:0", "orange", [ "v0" ] ],
+
+    [ "led_alarm:A", "esp:21", "red", [ "v0" ] ],
+    [ "led_alarm:C", "esp:GND.4", "black", [ "v0" ] ]
+  ],
+  "dependencies": {}
+}

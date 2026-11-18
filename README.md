@@ -81,7 +81,26 @@ npm run dev
 Open **`http://localhost:5173`** in your browser.
 * Use the **"Simulate Fire Hazard"** button during presentations to demonstrate the RL agent detecting the hazard and triggering emergency mode in real time.
 
-### 4. Flashing the M5Stamp ESP32-S3
+### 4. Standalone RL Verification & Fallback Demo (No Wokwi / Cloud Required)
+If presenting in an environment without internet connectivity, hardware, or when Wokwi is unavailable, run this **100% self-contained standalone RL demonstration**:
+```bash
+cd /home/kalki/RL/simulation
+uv run --with numpy,matplotlib,scikit-learn,pandas,seaborn python3 standalone_rl_demo.py
+```
+**What this does:**
+1. Generates **1,200 synthetic multi-modal sensor telemetry samples** across 5 physical scenarios (`Clean Air`, `Heat Wave`, `Toxic VOC Leak`, `Smoldering Fire`, `Flaming Fire`) and saves to `simulation/synthetic_dataset_1200.csv`.
+2. Formulates a **54-State MDP & Q-Learning Agent** with 216 trainable Q-weights.
+3. Evaluates against the 1,200 hold-out transitions, printing a full **Classification Report** and generating a **4x4 Confusion Matrix** with 100% hazard recall (0 false negatives).
+4. Exports high-resolution diagnostic plots to `docs/figures/`:
+   * `rl_confusion_matrix.png` (Action decision confusion matrix)
+   * `rl_training_loss_accuracy.png` (Loss & return convergence curves)
+   * `rl_synthetic_data_distribution.png` (Multi-feature scatter & histograms)
+   * `rl_network_weights_and_q_heatmap.png` (54-state Q-table activation heatmap)
+   * `rl_standalone_dashboard.png` (Master executive verification slide)
+
+* Alternatively, open and run the interactive notebook: `simulation/RL.ipynb`.
+
+### 5. Flashing the M5Stamp ESP32-S3
 1. Open Arduino IDE or PlatformIO.
 2. Install libraries:
    * `Adafruit BME680`

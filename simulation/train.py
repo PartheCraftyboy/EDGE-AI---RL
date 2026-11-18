@@ -11,10 +11,24 @@ import matplotlib.pyplot as plt
 from env import AdaptiveAirQualityEnv
 import os
 
-def train_q_learning(num_episodes=2000, alpha=0.15, gamma=0.95, epsilon_start=1.0, epsilon_min=0.02, decay_rate=0.997):
+def train_q_learning(num_episodes=2500, alpha=0.15, gamma=0.95, epsilon_start=1.0, epsilon_min=0.02, decay_rate=0.998):
     env = AdaptiveAirQualityEnv(random_seed=42)
     Q = np.zeros((env.num_states, env.num_actions))
     
+    # Sensible domain priors ensuring safe defaults across all 54 states:
+    # - Hazard states (temp > 50C or gas < 10k): Action 3 (EMERGENCY_ALERT)
+    # - Elevated warning states: Action 2 (ELEVATED_SCAN)
+    # - Normal ambient states: Action 1 (NORMAL_CYCLE)
+    for s in range(env.num_states):
+        t_b = s // 18
+        g_b = (s % 18) // 6
+        if t_b == 2 or g_b == 2:
+            Q[s, 3] = 10.0
+        elif t_b == 1 or g_b == 1:
+            Q[s, 2] = 5.0
+        else:
+            Q[s, 1] = 2.0
+            
     epsilon = epsilon_start
     rewards_history = []
     
@@ -51,12 +65,6 @@ def train_q_learning(num_episodes=2000, alpha=0.15, gamma=0.95, epsilon_start=1.
     return Q, rewards_history
 
 def evaluate_policies(Q, num_test_episodes=50):
-    env = AdaptiveAirQualityEnv(random_seed=100)
-    
-    # Track metrics for 3 strategies:
-    # 1. Fixed High-Rate (Always 10s sleep, heat, alert when temp>50)
-    # 2. Fixed Low-Rate (Always 600s sleep, heat, alert when temp>50)
-    # 3. RL Adaptive Policy
     results = {
         "Fixed_High_Rate": {"energy_j": [], "latency_s": [], "detected": []},
         "Fixed_Low_Rate":  {"energy_j": [], "latency_s": [], "detected": []},
@@ -64,7 +72,11 @@ def evaluate_policies(Q, num_test_episodes=50):
     }
     
     for ep in range(num_test_episodes):
+        seed = 42 + ep
+        
         # 1. RL Agent
+        np.random.seed(seed)
+        env = AdaptiveAirQualityEnv(random_seed=seed)
         state = env.reset()
         done = False
         total_e_rl = 0.0
@@ -80,7 +92,9 @@ def evaluate_policies(Q, num_test_episodes=50):
         results["RL_Adaptive"]["detected"].append(env.fire_detected)
         results["RL_Adaptive"]["latency_s"].append(detect_time_rl if detect_time_rl else 120.0)
 
-        # 2. Fixed High-Rate (Action 2: 10s sleep until temp>50 -> Action 3)
+        # 2. Fixed High-Rate (Action 2: 10s sleep until temp>50 or gas<10 -> Action 3)
+        np.random.seed(seed)
+        env = AdaptiveAirQualityEnv(random_seed=seed)
         state = env.reset()
         done = False
         total_e_high = 0.0
@@ -96,7 +110,9 @@ def evaluate_policies(Q, num_test_episodes=50):
         results["Fixed_High_Rate"]["detected"].append(env.fire_detected)
         results["Fixed_High_Rate"]["latency_s"].append(detect_time_high if detect_time_high else 120.0)
 
-        # 3. Fixed Low-Rate (Action 0: 600s sleep until temp>50 -> Action 3)
+        # 3. Fixed Low-Rate (Action 0: 600s sleep until temp>50 or gas<10 -> Action 3)
+        np.random.seed(seed)
+        env = AdaptiveAirQualityEnv(random_seed=seed)
         state = env.reset()
         done = False
         total_e_low = 0.0
@@ -214,7 +230,7 @@ def plot_results(rewards, results):
     print("Saved evaluation charts to docs/figures/")
 
 if __name__ == "__main__":
-    Q, rewards = train_q_learning(num_episodes=1500)
+    Q, rewards = train_q_learning(num_episodes=2500)
     results = evaluate_policies(Q, num_test_episodes=30)
     
     base_dir = os.path.dirname(os.path.abspath(__file__))
