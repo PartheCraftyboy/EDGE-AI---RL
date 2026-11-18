@@ -1,14 +1,3 @@
-/*
- * ESP32-S3 Wokwi Simulation: RL-Driven Adaptive Fire & Gas Sensing Edge Node
- * Sure-Shot Live MQTT Cloud Bridge to Local Dashboard
- *
- * Architecture:
- *   [Wokwi ESP32-S3] ---> (MQTT PubSubClient) ---> [broker.hivemq.com:1883]
- *                                                           |
- *                                                           v
- *   [Local React Dashboard :5173] <--- (FastAPI :8000) <----+
- */
-
 #include <Arduino.h>
 #include <WiFi.h>
 #include <PubSubClient.h>
@@ -26,6 +15,11 @@
 #define MQTT_BROKER         "broker.hivemq.com"
 #define MQTT_PORT           1883
 #define MQTT_TOPIC          "rl-edge-fire-gas/kalki/telemetry"
+
+// --- Debug switch: force telemetry on EVERY boot cycle while testing ---
+// Set to false once you've confirmed the Wokwi -> broker -> backend chain works,
+// to restore the original 1-in-10 power-saving behavior.
+#define TELEMETRY_EVERY_BOOT true
 
 // --- Battery Chemistry Parameters (1S LiFePO4) ---
 #define BATTERY_NOMINAL_V   3.20f
@@ -127,38 +121,92 @@ int get_rl_action(int state_idx) {
 }
 
 int compute_state_index(float temp, float gas_kohm, float gas_deriv, float soc_pct) {
-  int t_bin = (temp < 35.0f) ? 0 : (temp < 50.0f ? 1 : 2);
-  int g_bin = (gas_kohm > 30.0f) ? 0 : (gas_kohm > 10.0f ? 1 : 2);
-  int d_bin = (gas_deriv < -0.5f) ? 1 : 0;
-  int b_bin = (soc_pct < 0.30f) ? 0 : (soc_pct < 0.70f ? 1 : 2);
+    int t_bin = (temp < 35.0f) ? 0 : (temp < 50.0f ? 1 : 2);
+    int g_bin = (gas_kohm > 30.0f) ? 0 : (gas_kohm > 10.0f ? 1 : 2);
+    int d_bin = (gas_deriv < -0.5f) ? 1 : 0;
+    int b_bin = (soc_pct < 0.30f) ? 0 : (soc_pct < 0.70f ? 1 : 2);
 
-  int state_idx = (t_bin * 18) + (g_bin * 6) + (d_bin * 3) + b_bin;
-  if (state_idx < 0) state_idx = 0;
-  if (state_idx >= NUM_STATES) state_idx = NUM_STATES - 1;
-  return state_idx;
+    int state_idx = (t_bin * 18) + (g_bin * 6) + (d_bin * 3) + b_bin;
+    if (state_idx < 0) state_idx = 0;
+    if (state_idx >= NUM_STATES) state_idx = NUM_STATES - 1;
+    return state_idx;
+}
+
+// Human-readable WiFi status, since WiFi.status() alone is just a number
+const char* wifi_status_to_string(wl_status_t status) {
+    switch (status) {
+        case WL_IDLE_STATUS:     return "IDLE_STATUS (not yet started)";
+        case WL_NO_SSID_AVAIL:   return "NO_SSID_AVAIL (SSID not found)";
+        case WL_SCAN_COMPLETED:  return "SCAN_COMPLETED";
+        case WL_CONNECTED:       return "CONNECTED";
+        case WL_CONNECT_FAILED:  return "CONNECT_FAILED (wrong password/auth)";
+        case WL_CONNECTION_LOST: return "CONNECTION_LOST";
+        case WL_DISCONNECTED:    return "DISCONNECTED";
+        default:                 return "UNKNOWN";
+    }
+}
+
+// Human-readable PubSubClient connect() return code
+const char* mqtt_rc_to_string(int rc) {
+    switch (rc) {
+        case -4: return "MQTT_CONNECTION_TIMEOUT (server didn't respond in time)";
+        case -3: return "MQTT_CONNECTION_LOST (network connection broke)";
+        case -2: return "MQTT_CONNECT_FAILED (couldn't reach broker.hivemq.com:1883 - network/firewall issue)";
+        case -1: return "MQTT_DISCONNECTED (clean disconnect)";
+        case  0: return "MQTT_CONNECTED";
+        case  1: return "MQTT_CONNECT_BAD_PROTOCOL";
+        case  2: return "MQTT_CONNECT_BAD_CLIENT_ID (broker rejected the client ID)";
+        case  3: return "MQTT_CONNECT_UNAVAILABLE (broker refused the connection)";
+        case  4: return "MQTT_CONNECT_BAD_CREDENTIALS";
+        case  5: return "MQTT_CONNECT_UNAUTHORIZED";
+        default: return "UNKNOWN_RC";
+    }
 }
 
 void transmit_telemetry(float temp, float gas_kohm, float v_bat, float soc_pct, int action, bool is_alert) {
-  Serial.printf("\n[Wi-Fi] Connecting to '%s'...\n", WIFI_SSID);
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    Serial.printf("\n[Wi-Fi] Connecting to '%s'...\n", WIFI_SSID);
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
-  unsigned long start_attempt = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - start_attempt < 6000) {
-    delay(100);
-    Serial.print(".");
-  }
+    const unsigned long WIFI_TIMEOUT_MS = 15000; // was 6000 - too tight for Wokwi-GUEST
+    unsigned long start_attempt = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - start_attempt < WIFI_TIMEOUT_MS) {
+        delay(250);
+        Serial.print(".");
+    }
 
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("\n[Wi-Fi] Connection timed out.");
-    return;
-  }
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.printf("\n[Wi-Fi] Connection timed out after %lums. Status: %s\n",
+                      WIFI_TIMEOUT_MS, wifi_status_to_string(WiFi.status()));
+        return;
+    }
 
-  Serial.println("\n[Wi-Fi] Connected! Connecting to HiveMQ MQTT Broker...");
-  mqttClient.setServer(MQTT_BROKER, MQTT_PORT);
+    Serial.println("\n[Wi-Fi] Connected! IP: " + WiFi.localIP().toString());
+    Serial.printf("[MQTT] Connecting to %s:%d ...\n", MQTT_BROKER, MQTT_PORT);
+    mqttClient.setServer(MQTT_BROKER, MQTT_PORT);
+    mqttClient.setSocketTimeout(10);
 
-  String clientId = "Wokwi-ESP32-S3-" + String(random(0xffff), HEX);
-  if (mqttClient.connect(clientId.c_str())) {
+    String clientId = "Wokwi-ESP32-S3-" + String(random(0xffff), HEX);
+
+    const int MAX_MQTT_ATTEMPTS = 3;
+    bool connected = false;
+    for (int attempt = 1; attempt <= MAX_MQTT_ATTEMPTS && !connected; attempt++) {
+        Serial.printf("[MQTT] Attempt %d/%d with client ID '%s'...\n",
+                      attempt, MAX_MQTT_ATTEMPTS, clientId.c_str());
+        connected = mqttClient.connect(clientId.c_str());
+        if (!connected) {
+            Serial.printf("[MQTT] Failed: %s\n", mqtt_rc_to_string(mqttClient.state()));
+            delay(1000);
+        }
+    }
+
+    if (!connected) {
+        Serial.println("[MQTT] Giving up after max attempts this cycle.");
+        WiFi.disconnect(true);
+        WiFi.mode(WIFI_OFF);
+        return;
+    }
+
     String json = "{";
     json += "\"device_id\":\"m5stamp-s3-wokwi\",";
     json += "\"boot_count\":" + String(boot_count) + ",";
@@ -170,111 +218,121 @@ void transmit_telemetry(float temp, float gas_kohm, float v_bat, float soc_pct, 
     json += "\"rl_action\":\"" + String(ACTION_NAMES[action]) + "\"";
     json += "}";
 
-    Serial.println("[MQTT Cloud Broker] Publishing payload: " + json);
-    mqttClient.publish(MQTT_TOPIC, json.c_str());
-    delay(150);
-    mqttClient.disconnect();
-    Serial.println("[MQTT] Published successfully!");
-  } else {
-    Serial.printf("[MQTT Error] Connection to HiveMQ failed, rc=%d\n", mqttClient.state());
-  }
+    Serial.println("[MQTT] Publishing payload: " + json);
+    bool pub_ok = mqttClient.publish(MQTT_TOPIC, json.c_str());
+    Serial.printf("[MQTT] publish() returned: %s\n", pub_ok ? "true" : "false");
 
-  WiFi.disconnect(true);
-  WiFi.mode(WIFI_OFF);
+    // Give the client a few loop() cycles to actually flush the write and
+    // handle the keepalive ping before we yank the connection down.
+    for (int i = 0; i < 10; i++) {
+        mqttClient.loop();
+        delay(30);
+    }
+
+    mqttClient.disconnect();
+    Serial.println("[MQTT] Disconnected cleanly.");
+
+    WiFi.disconnect(true);
+    WiFi.mode(WIFI_OFF);
 }
 
 void setup() {
-  Serial.begin(115200);
-  delay(500);
-  boot_count++;
+    Serial.begin(115200);
+    delay(500);
+    boot_count++;
 
-  pinMode(SIM_BUTTON_PIN, INPUT_PULLUP);
-  pinMode(ALARM_LED_PIN, OUTPUT);
-  digitalWrite(ALARM_LED_PIN, LOW);
+    pinMode(SIM_BUTTON_PIN, INPUT_PULLUP);
+    pinMode(ALARM_LED_PIN, OUTPUT);
+    digitalWrite(ALARM_LED_PIN, LOW);
 
-  Serial.println("\n========================================================");
-  Serial.println("  M5Stamp ESP32-S3 RL Edge AI Fire & Gas Node [Wokwi]");
-  Serial.printf("  Boot Cycle: #%d | Preserved in RTC RAM\n", boot_count);
-  Serial.println("========================================================");
+    Serial.println("\n========================================================");
+    Serial.println("  M5Stamp ESP32-S3 RL Edge AI Fire & Gas Node [Wokwi]");
+    Serial.printf("  Boot Cycle: #%d | Preserved in RTC RAM\n", boot_count);
+    if (TELEMETRY_EVERY_BOOT) {
+        Serial.println("  [DEBUG MODE] TELEMETRY_EVERY_BOOT = true -> publishing every cycle");
+    }
+    Serial.println("========================================================");
 
-  // 1. INA219 Fuel Gauge: Read from LiFePO4 Potentiometer Tool on GPIO 3
-  int raw_bat = analogRead(BATTERY_POT_PIN);
-  float bus_voltage = BATTERY_CUTOFF_V + (((float)raw_bat / 4095.0f) * (BATTERY_MAX_V - BATTERY_CUTOFF_V));
-  bus_voltage = constrain(bus_voltage, BATTERY_CUTOFF_V, BATTERY_MAX_V);
-  float soc_pct = (bus_voltage - BATTERY_CUTOFF_V) / (BATTERY_MAX_V - BATTERY_CUTOFF_V);
-  soc_pct = constrain(soc_pct, 0.0f, 1.0f);
-  Serial.printf("[Battery (INA219)] Voltage: %.3f V | SoC: %.1f%%\n", bus_voltage, soc_pct * 100.0f);
+    // 1. INA219 Fuel Gauge: Read from LiFePO4 Potentiometer Tool on GPIO 3
+    int raw_bat = analogRead(BATTERY_POT_PIN);
+    float bus_voltage = BATTERY_CUTOFF_V + (((float)raw_bat / 4095.0f) * (BATTERY_MAX_V - BATTERY_CUTOFF_V));
+    bus_voltage = constrain(bus_voltage, BATTERY_CUTOFF_V, BATTERY_MAX_V);
+    float soc_pct = (bus_voltage - BATTERY_CUTOFF_V) / (BATTERY_MAX_V - BATTERY_CUTOFF_V);
+    soc_pct = constrain(soc_pct, 0.0f, 1.0f);
+    Serial.printf("[Battery (INA219)] Voltage: %.3f V | SoC: %.1f%%\n", bus_voltage, soc_pct * 100.0f);
 
-  // 2. Read Environmental Hardware Sensors
-  int raw_temp = analogRead(TEMP_SENSOR_PIN);
-  int raw_gas = analogRead(GAS_SENSOR_PIN);
+    // 2. Read Environmental Hardware Sensors
+    int raw_temp = analogRead(TEMP_SENSOR_PIN);
+    int raw_gas = analogRead(GAS_SENSOR_PIN);
 
-  // Temperature calculation from NTC sensor
-  float temperature = 24.5f;
-  if (raw_temp > 50 && raw_temp < 4050) {
-    const float BETA = 3950.0f;
-    temperature = 1.0f / (log(1.0f / (4095.0f / (float)raw_temp - 1.0f)) / BETA + 1.0f / 298.15f) - 273.15f;
-  } else if (raw_temp >= 4050) {
-    temperature = 95.0f;
-  }
-  temperature = constrain(temperature, -10.0f, 99.0f);
+    // Temperature calculation from NTC sensor
+    float temperature = 24.5f;
+    if (raw_temp > 50 && raw_temp < 4050) {
+        const float BETA = 3950.0f;
+        temperature = 1.0f / (log(1.0f / (4095.0f / (float)raw_temp - 1.0f)) / BETA + 1.0f / 298.15f) - 273.15f;
+    } else if (raw_temp >= 4050) {
+        temperature = 95.0f;
+    }
+    temperature = constrain(temperature, -10.0f, 99.0f);
 
-  // Gas Resistance calculation from MQ Gas Sensor
-  float gas_ratio = (float)raw_gas / 4095.0f;
-  float gas_kohm = 50.0f - (pow(gas_ratio, 1.8f) * 46.0f);
-  gas_kohm = constrain(gas_kohm, 2.0f, 55.0f);
+    // Gas Resistance calculation from MQ Gas Sensor
+    float gas_ratio = (float)raw_gas / 4095.0f;
+    float gas_kohm = 50.0f - (pow(gas_ratio, 1.8f) * 46.0f);
+    gas_kohm = constrain(gas_kohm, 2.0f, 55.0f);
 
-  // Pushbutton override for instant fire injection demo
-  bool fire_button_pressed = (digitalRead(SIM_BUTTON_PIN) == LOW);
-  if (fire_button_pressed) {
-    Serial.println("\n>>> [EVENT] Red Button Pressed! INJECTING FIRE HAZARD! <<<");
-    temperature = 72.5f;
-    gas_kohm = 3.0f;
-  }
+    // Pushbutton override for instant fire injection demo
+    bool fire_button_pressed = (digitalRead(SIM_BUTTON_PIN) == LOW);
+    if (fire_button_pressed) {
+        Serial.println("\n>>> [EVENT] Red Button Pressed! INJECTING FIRE HAZARD! <<<");
+        temperature = 72.5f;
+        gas_kohm = 3.0f;
+    }
 
-  Serial.printf("[Sensors] Temp: %.2f C | Gas Resistance: %.2f kOhm\n", temperature, gas_kohm);
+    Serial.printf("[Sensors] Temp: %.2f C | Gas Resistance: %.2f kOhm\n", temperature, gas_kohm);
 
-  // 3. Compute Derivatives & State Index
-  float dt = (float)rtc_last_sleep_sec;
-  float gas_deriv = (dt > 0) ? (gas_kohm - rtc_last_gas) / dt : 0.0f;
-  int state_idx = compute_state_index(temperature, gas_kohm, gas_deriv, soc_pct);
+    // 3. Compute Derivatives & State Index
+    float dt = (float)rtc_last_sleep_sec;
+    float gas_deriv = (dt > 0) ? (gas_kohm - rtc_last_gas) / dt : 0.0f;
+    int state_idx = compute_state_index(temperature, gas_kohm, gas_deriv, soc_pct);
 
-  // 4. Query RL Policy (Lookup in Q-table)
-  int action = get_rl_action(state_idx);
+    // 4. Query RL Policy (Lookup in Q-table)
+    int action = get_rl_action(state_idx);
 
-  Serial.println("--------------------------------------------------------");
-  Serial.printf("  RL State Index:  %d / 54\n", state_idx);
-  Serial.printf("  Selected Action: [%d] %s\n", action, ACTION_NAMES[action]);
-  Serial.printf("  Action Sleep:    %llu seconds\n", ACTION_SLEEP_SEC[action]);
-  Serial.println("--------------------------------------------------------");
+    Serial.println("--------------------------------------------------------");
+    Serial.printf("  RL State Index:  %d / 54\n", state_idx);
+    Serial.printf("  Selected Action: [%d] %s\n", action, ACTION_NAMES[action]);
+    Serial.printf("  Action Sleep:    %llu seconds\n", ACTION_SLEEP_SEC[action]);
+    Serial.println("--------------------------------------------------------");
 
-  // 5. Fire Alert & Actuation Logic
-  bool is_fire_alert = (action == 3) || (temperature > 50.0f) || (gas_kohm < 10.0f);
-  digitalWrite(ALARM_LED_PIN, is_fire_alert ? HIGH : LOW);
+    // 5. Fire Alert & Actuation Logic
+    bool is_fire_alert = (action == 3) || (temperature > 50.0f) || (gas_kohm < 10.0f);
+    digitalWrite(ALARM_LED_PIN, is_fire_alert ? HIGH : LOW);
 
-  if (is_fire_alert) {
-    Serial.println(">>> [ALARM] FIRE / TOXIC GAS DETECTED! DISPATCHING EMERGENCY ALERT! <<<");
-    transmit_telemetry(temperature, gas_kohm, bus_voltage, soc_pct, action, true);
-  } else if (boot_count % 10 == 0) {
-    Serial.println("[Heartbeat] Routine periodic telemetry dispatch.");
-    transmit_telemetry(temperature, gas_kohm, bus_voltage, soc_pct, action, false);
-  }
+    if (is_fire_alert) {
+        Serial.println(">>> [ALARM] FIRE / TOXIC GAS DETECTED! DISPATCHING EMERGENCY ALERT! <<<");
+        transmit_telemetry(temperature, gas_kohm, bus_voltage, soc_pct, action, true);
+    } else if (TELEMETRY_EVERY_BOOT || (boot_count % 10 == 0)) {
+        Serial.println("[Heartbeat] Routine periodic telemetry dispatch.");
+        transmit_telemetry(temperature, gas_kohm, bus_voltage, soc_pct, action, false);
+    } else {
+        Serial.println("[Skip] Not a fire alert and not a heartbeat cycle - no transmission this boot.");
+    }
 
-  // 6. Save RTC variables
-  rtc_last_temp = temperature;
-  rtc_last_gas = gas_kohm;
-  uint64_t sleep_sec = ACTION_SLEEP_SEC[action];
-  rtc_last_sleep_sec = sleep_sec;
+    // 6. Save RTC variables
+    rtc_last_temp = temperature;
+    rtc_last_gas = gas_kohm;
+    uint64_t sleep_sec = ACTION_SLEEP_SEC[action];
+    rtc_last_sleep_sec = sleep_sec;
 
-  // 7. Enter Deep Sleep (Simulated by Wokwi timer wakeup)
-  Serial.printf("[Sleep] Entering Deep Sleep for %llu seconds. Current ~15 uA.\n", sleep_sec);
-  Serial.flush();
+    // 7. Enter Deep Sleep (Simulated by Wokwi timer wakeup)
+    Serial.printf("[Sleep] Entering Deep Sleep for %llu seconds. Current ~15 uA.\n", sleep_sec);
+    Serial.flush();
 
-  uint64_t sim_sleep_us = min(sleep_sec, (uint64_t)5) * 1000000ULL;
-  esp_sleep_enable_timer_wakeup(sim_sleep_us);
-  esp_deep_sleep_start();
+    uint64_t sim_sleep_us = min(sleep_sec, (uint64_t)5) * 1000000ULL;
+    esp_sleep_enable_timer_wakeup(sim_sleep_us);
+    esp_deep_sleep_start();
 }
 
 void loop() {
-  // Never reached: ESP32 resets into setup() upon wakeup
+    // Never reached: ESP32 resets into setup() upon wakeup
 }
